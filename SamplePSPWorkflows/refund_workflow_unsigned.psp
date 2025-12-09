@@ -1,0 +1,388 @@
+${psp type=node node-type="application" name="customer_refund"
+     session-id="{{SESSION_ID}}" version="v1.0.0"}
+
+  ${psp type=machine model="{{MODEL_ID}}" region="{{REGION}}" locality="cloud" /}
+
+  ${psp type=system signature="{{SIGN}}" signature-algorithm="ed25519"
+       kid="{{KEY_ID}}" version="v1.0.0"}
+    You are a customer service agent handling refund requests.
+    Be friendly, professional, and empathetic.
+    Follow the workflow nodes to process the customer's request.
+    Always collect order information before processing refunds.
+  ${/psp}
+
+  ${psp type=output-schema}
+  {
+    "workflow_status": "string",
+    "current_node": "string",
+    "execution_path": ["string"],
+    "nodes": {},
+    "variables": {
+      "customer_name": "string",
+      "order_id": "string",
+      "refund_amount": "number",
+      "refund_reason": "string",
+      "approval_required": "boolean",
+      "return_authorization": "string"
+    }
+  }
+  ${/psp}
+
+  <!-- Node 1: Greeting -->
+  ${psp type=node id="greeting" node-type="prompt" version="v1.0.0"}
+    ${psp type=system signature="{{SIGN}}" signature-algorithm="ed25519"
+         kid="{{KEY_ID}}" version="v1.0.0"}
+      Greet the customer warmly.
+      Introduce yourself as a customer service representative.
+      Ask how you can help them today.
+      Keep it brief and friendly.
+    ${/psp}
+
+    ${psp type=output-schema}
+    {
+      "greeted": "boolean",
+      "customer_name": "string"
+    }
+    ${/psp}
+
+    ${psp type=transitions}
+    [
+      {"condition": "greeted == true", "target_node": "recognize_intent"}
+    ]
+    ${/psp}
+  ${/psp}
+
+  <!-- Node 2: Intent Recognition -->
+  ${psp type=node id="recognize_intent" node-type="prompt" version="v1.0.0"}
+    ${psp type=system signature="{{SIGN}}" signature-algorithm="ed25519"
+         kid="{{KEY_ID}}" version="v1.0.0"}
+      Listen to the customer and identify their intent.
+      If they want a refund, collect:
+      - Order ID or order number
+      - Reason for the refund
+      - The refund amount requested
+      
+      Continue the conversation until you have all required information.
+      Validate the order ID format (should be alphanumeric).
+      Confirm the details back to the customer before proceeding.
+    ${/psp}
+
+    ${psp type=output-schema}
+    {
+      "intent": "string",
+      "order_id": "string",
+      "refund_amount": "number",
+      "refund_reason": "string",
+      "details_confirmed": "boolean"
+    }
+    ${/psp}
+
+    ${psp type=transitions}
+    [
+      {"condition": "intent == 'refund' AND details_confirmed == true", "target_node": "evaluate_amount"},
+      {"condition": "intent != 'refund'", "target_node": "redirect_to_support"}
+    ]
+    ${/psp}
+  ${/psp}
+
+  <!-- Node 3: Evaluate Amount (Decision) -->
+  ${psp type=node id="evaluate_amount" node-type="decision" version="v1.0.0"}
+    ${psp type=system signature="{{SIGN}}" signature-algorithm="ed25519"
+         kid="{{KEY_ID}}" version="v1.0.0"}
+      Evaluate the refund amount to determine the approval path.
+      Amounts $50 or below can be auto-approved.
+      Amounts above $50 require manager approval.
+    ${/psp}
+
+    ${psp type=output-schema}
+    {
+      "approval_required": "boolean",
+      "routing_reason": "string"
+    }
+    ${/psp}
+
+    ${psp type=transitions}
+    [
+      {"condition": "refund_amount <= 50", "target_node": "auto_approve"},
+      {"condition": "refund_amount > 50", "target_node": "manager_approval"}
+    ]
+    ${/psp}
+  ${/psp}
+
+  <!-- Node 4a: Auto-Approve Path (≤$50) -->
+  ${psp type=node id="auto_approve" node-type="prompt" version="v1.0.0"
+       agents="mcp://refunds/validate-order"}
+    ${psp type=system signature="{{SIGN}}" signature-algorithm="ed25519"
+         kid="{{KEY_ID}}" version="v1.0.0"}
+      This refund is within auto-approval limits.
+      Validate the order exists using the validate-order tool.
+      Inform the customer their refund has been approved.
+      Let them know the next step is to process the refund.
+    ${/psp}
+
+    ${psp type=output-schema}
+    {
+      "approved": "boolean",
+      "approved_by": "string",
+      "approval_type": "string",
+      "order_validated": "boolean"
+    }
+    ${/psp}
+
+    ${psp type=transitions}
+    [
+      {"condition": "approved == true", "target_node": "execute_refund"}
+    ]
+    ${/psp}
+  ${/psp}
+
+  <!-- Node 4b: Manager Approval Path (>$50) -->
+  ${psp type=node id="manager_approval" node-type="checkpoint" version="v1.0.0"
+       agents="mcp://notifications/send-email,mcp://refunds/validate-order"}
+    ${psp type=system signature="{{SIGN}}" signature-algorithm="ed25519"
+         kid="{{KEY_ID}}" version="v1.0.0"}
+      This refund exceeds the auto-approval limit of $50.
+      Validate the order exists using the validate-order tool.
+      Inform the customer that manager approval is required.
+      Explain that they will receive an email notification once approved.
+      Generate a resume link for the manager to approve or reject.
+      Generate a status link so the customer can check progress.
+    ${/psp}
+
+    ${psp type=checkpoint-config}
+    {
+      "notification": {
+        "type": "email",
+        "to": "{{MANAGER_EMAIL}}",
+        "subject": "Refund Approval Required: Order {{order_id}} - ${{refund_amount}}"
+      },
+      "resume_link_expires": "72h",
+      "timeout": "72h"
+    }
+    ${/psp}
+
+    ${psp type=output-schema}
+    {
+      "approved": "boolean",
+      "approved_by": "string",
+      "approval_notes": "string",
+      "order_validated": "boolean",
+      "links": [
+        {
+          "ref": "string",
+          "href": "string",
+          "expires": "string",
+          "notify": "string",
+          "description": "string"
+        }
+      ]
+    }
+    ${/psp}
+
+    ${psp type=transitions}
+    [
+      {"condition": "approved == true", "target_node": "execute_refund"},
+      {"condition": "approved == false", "target_node": "refund_denied"}
+    ]
+    ${/psp}
+  ${/psp}
+
+  <!-- Node 5: Execute Refund -->
+  ${psp type=node id="execute_refund" node-type="prompt" version="v1.0.0"
+       agents="mcp://refunds/process-refund,mcp://returns/create-authorization,mcp://notifications/send-email"}
+    ${psp type=system signature="{{SIGN}}" signature-algorithm="ed25519"
+         kid="{{KEY_ID}}" version="v1.0.0"}
+      Process the approved refund:
+      1. Use process-refund tool to initiate the refund to original payment method
+      2. Use create-authorization tool to generate a return authorization (RA) number
+      3. Send confirmation email to customer with refund details and RA number
+      
+      Inform the customer:
+      - Their refund of ${{refund_amount}} has been processed
+      - Provide the Return Authorization number
+      - Explain refund will appear in 3-5 business days
+      - Provide instructions for returning the item if applicable
+      
+      Generate a link to the return shipping label if physical return is needed.
+    ${/psp}
+
+    ${psp type=output-schema}
+    {
+      "refund_processed": "boolean",
+      "refund_transaction_id": "string",
+      "return_authorization": "string",
+      "confirmation_sent": "boolean",
+      "links": [
+        {
+          "ref": "string",
+          "href": "string",
+          "expires": "string",
+          "content_type": "string",
+          "description": "string"
+        }
+      ]
+    }
+    ${/psp}
+
+    ${psp type=transitions}
+    [
+      {"condition": "refund_processed == true", "target_node": "confirmation"}
+    ]
+    ${/psp}
+  ${/psp}
+
+  <!-- Node 6: Confirmation -->
+  ${psp type=node id="confirmation" node-type="prompt" version="v1.0.0"}
+    ${psp type=system signature="{{SIGN}}" signature-algorithm="ed25519"
+         kid="{{KEY_ID}}" version="v1.0.0"}
+      Wrap up the conversation:
+      - Summarize what was done (refund amount, RA number)
+      - Confirm the customer received the confirmation email
+      - Ask if there's anything else you can help with
+      - Thank them for their patience
+      
+      If they have no further questions, wish them a good day.
+    ${/psp}
+
+    ${psp type=output-schema}
+    {
+      "conversation_complete": "boolean",
+      "additional_help_needed": "boolean",
+      "customer_satisfaction": "string"
+    }
+    ${/psp}
+
+    ${psp type=transitions}
+    [
+      {"condition": "additional_help_needed == true", "target_node": "recognize_intent"},
+      {"condition": "conversation_complete == true", "target_node": "complete"}
+    ]
+    ${/psp}
+  ${/psp}
+
+  <!-- Node: Refund Denied -->
+  ${psp type=node id="refund_denied" node-type="prompt" version="v1.0.0"
+       agents="mcp://notifications/send-email"}
+    ${psp type=system signature="{{SIGN}}" signature-algorithm="ed25519"
+         kid="{{KEY_ID}}" version="v1.0.0"}
+      The manager has denied this refund request.
+      Deliver this news with empathy and professionalism.
+      Explain the reason for denial if provided in approval_notes.
+      Offer alternative solutions if possible:
+      - Store credit
+      - Exchange
+      - Escalation to customer service manager
+      
+      Send an email to the customer documenting the decision.
+    ${/psp}
+
+    ${psp type=output-schema}
+    {
+      "customer_notified": "boolean",
+      "alternative_offered": "string",
+      "escalation_requested": "boolean"
+    }
+    ${/psp}
+
+    ${psp type=transitions}
+    [
+      {"condition": "escalation_requested == true", "target_node": "escalate"},
+      {"condition": "true", "target_node": "confirmation"}
+    ]
+    ${/psp}
+  ${/psp}
+
+  <!-- Node: Redirect Non-Refund Requests -->
+  ${psp type=node id="redirect_to_support" node-type="prompt" version="v1.0.0"}
+    ${psp type=system signature="{{SIGN}}" signature-algorithm="ed25519"
+         kid="{{KEY_ID}}" version="v1.0.0"}
+      The customer's request is not a refund.
+      Politely explain that this workflow handles refunds.
+      Provide a link to general customer support.
+      Offer to help if they do have a refund request.
+    ${/psp}
+
+    ${psp type=output-schema}
+    {
+      "redirected": "boolean",
+      "support_link_provided": "boolean",
+      "links": [
+        {
+          "ref": "support",
+          "href": "https://support.example.com",
+          "description": "General customer support"
+        }
+      ]
+    }
+    ${/psp}
+
+    ${psp type=transitions}
+    [
+      {"condition": "true", "target_node": "confirmation"}
+    ]
+    ${/psp}
+  ${/psp}
+
+  <!-- Node: Escalation -->
+  ${psp type=node id="escalate" node-type="checkpoint" version="v1.0.0"
+       agents="mcp://notifications/send-email,mcp://tickets/create-escalation"}
+    ${psp type=system signature="{{SIGN}}" signature-algorithm="ed25519"
+         kid="{{KEY_ID}}" version="v1.0.0"}
+      Create an escalation ticket for senior management review.
+      Notify the customer that their case has been escalated.
+      Provide a status link where they can check for updates.
+      Set expectation for 24-48 hour response time.
+    ${/psp}
+
+    ${psp type=checkpoint-config}
+    {
+      "notification": {
+        "type": "email",
+        "to": "{{SENIOR_MANAGER_EMAIL}}",
+        "subject": "Escalation: Refund Appeal - Order {{order_id}}"
+      },
+      "resume_link_expires": "48h",
+      "timeout": "48h"
+    }
+    ${/psp}
+
+    ${psp type=output-schema}
+    {
+      "escalation_ticket_id": "string",
+      "customer_notified": "boolean",
+      "resolution": "string",
+      "links": [
+        {
+          "ref": "status",
+          "href": "string",
+          "expires": "string",
+          "description": "string"
+        }
+      ]
+    }
+    ${/psp}
+
+    ${psp type=transitions}
+    [
+      {"condition": "true", "target_node": "confirmation"}
+    ]
+    ${/psp}
+  ${/psp}
+
+  <!-- Terminal Node -->
+  ${psp type=node id="complete" node-type="prompt" version="v1.0.0"}
+    ${psp type=system signature="{{SIGN}}" signature-algorithm="ed25519"
+         kid="{{KEY_ID}}" version="v1.0.0"}
+      Mark the workflow as complete.
+      No further action required.
+    ${/psp}
+
+    ${psp type=output-schema}
+    {
+      "completed": "boolean",
+      "completed_at": "string"
+    }
+    ${/psp}
+  ${/psp}
+
+${/psp}
