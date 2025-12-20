@@ -95,9 +95,13 @@ ${/psp}
 An application MAY contain another application as a child node. Child applications:
 
 - Have independent `session-id` (audit isolation)
+- Receive input from prior node and may have settings
 - Run to completion before returning to parent
-- Output becomes the node output in parent context
+- Full output persisted independently under child's session-id
+- Node output contains only `session_id` and `workflow_status`
 - MUST NOT have less restrictive policies than parent
+
+Multiple child applications supported - each node's output contains its child's session reference. To retrieve full child output, query by session-id.
 
 Policy inheritance is additive restrictive:
 - Child MAY have lower `trust-level` (more restrictive)

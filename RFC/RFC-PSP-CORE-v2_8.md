@@ -907,7 +907,7 @@ ${/psp}
 
 ### 8.5 Nested Applications
 
-An application MAY contain another application as a child node. The child application is treated as a node within the parent, with the child's final output becoming the node output in the parent context.
+An application MAY contain another application as a child node. The child application operates independently, with its own session and persisted output.
 
 ```
 ${psp type=node node-type="application" name="customer_service"
@@ -943,17 +943,68 @@ ${/psp}
 
 **Nested Application Behavior:**
 
-1. **Independent Session**: Child applications are assigned their own `session-id`, independent of the parent. This provides audit isolation and enables separate state management.
+1. **Independent Session**: Child applications are assigned their own `session-id`, independent of the parent. The child application's state and output are persisted separately under this session.
 
-2. **Run to Completion**: Child applications execute their full workflow before returning control to the parent. The parent treats the child application as a single node that completes when the child reaches a terminal state.
+2. **Input and Settings**: Child applications receive input from the preceding node's output and may have settings configured by the parent workflow. This is the extent of data passed into the child.
 
-3. **Output Propagation**: The child application's final output becomes the node output accessible to the parent for transition evaluation and downstream processing.
+3. **Run to Completion**: Child applications execute their full workflow from start to finish before returning control to the parent. The parent treats the child application as a single node that completes when the child reaches a terminal state.
 
-4. **Policy Inheritance**: Security policies are additive and restrictive. A child application:
+4. **Output Isolation**: The child application's full output is NOT inlined in the parent's application output. The node output for a child application contains only `session_id` and `workflow_status`. The child's full output is retrieved separately using the session-id, just like any other application run. This supports multiple child applications within a single parent.
+
+5. **Policy Inheritance**: Security policies are additive and restrictive. A child application:
    - MAY have a MORE restrictive `trust-level` (lower number = higher trust required)
    - MAY have MORE restrictive `transition-source` constraints
    - MAY have a NARROWER `agents` scope (subset of parent's tools)
    - MUST NOT have LESS restrictive policies than its parent
+
+**Parent Node Record for Child Application:**
+
+When a node of type `application` completes, its output contains the child session reference:
+
+```json
+{
+  "node_id": "payment_app",
+  "node_type": "application",
+  "status": "completed",
+  "output": {
+    "session_id": "sess_payment_a1b2c3",
+    "workflow_status": "completed"
+  },
+  "started_at": "2025-01-15T10:30:00Z",
+  "completed_at": "2025-01-15T10:35:22Z"
+}
+```
+
+This pattern supports multiple child applications within a parent - each child node has its own output containing its session reference:
+
+```json
+{
+  "nodes": {
+    "payment_app": {
+      "status": "completed",
+      "output": {
+        "session_id": "sess_payment_a1b2c3",
+        "workflow_status": "completed"
+      }
+    },
+    "compliance_check": {
+      "status": "completed",
+      "output": {
+        "session_id": "sess_compliance_x7y8z9",
+        "workflow_status": "completed"
+      }
+    }
+  }
+}
+```
+
+To access a child's full output:
+
+```typescript
+result = mcp.call("realflow.sessions.get", {
+  session_id: "sess_payment_a1b2c3"
+})
+```
 
 **Policy Enforcement:**
 
@@ -5635,7 +5686,9 @@ Child applications MUST have independent session identifiers.
 
 Child applications MUST run to completion before returning control to the parent.
 
-Child application output MUST be accessible to the parent as node output.
+Child application output MUST be persisted independently under the child's session-id.
+
+The output of a node with `node-type="application"` MUST contain `session_id` and `workflow_status` referencing the child application.
 
 Child applications MUST NOT have less restrictive security policies than their parent.
 
